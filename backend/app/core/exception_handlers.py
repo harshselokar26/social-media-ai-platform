@@ -30,3 +30,18 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 async def generic_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"success": False, "message": "Internal server error"})
+
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
+
+
+async def validation_exception_handler(request, exc):
+
+    return JSONResponse(
+        status_code=422,
+        content=jsonable_encoder({
+            "success": False,
+            "message": "Validation error",
+            "errors": exc.errors(),
+        }),
+    )
