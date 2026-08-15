@@ -1,5 +1,7 @@
 from app.models.meta_connection import MetaConnection
 from app.models.facebook_page import FacebookPage
+from app.models.instagram_account import InstagramAccount
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
@@ -13,20 +15,20 @@ from app.exceptions.auth import (
     InvalidCredentialsException,
 )
 
-from app.models.meta_connection import MetaConnection
-
 from app.schemas.auth import RegisterRequest
 from app.schemas.user import UserResponse
 
 from app.services.auth_service import AuthService
 from app.services.meta_auth_service import MetaAuthService
 from app.services.meta_state_service import MetaStateService
-
-
+from app.services.instagram_auth_service import InstagramAuthService
 router = APIRouter(
     prefix="/auth",
     tags=["Authentication"],
 )
+
+
+
 
 
 # ============================================================
@@ -423,4 +425,256 @@ async def meta_pages(
 
     return {
         "data": response_pages
+    }
+
+# ============================================================
+# INSTAGRAM LOGIN
+# ============================================================
+
+@router.get("/instagram")
+def instagram_login(
+    current_user=Depends(get_current_user),
+):
+    """
+    Start Instagram OAuth login.
+    """
+
+    # Reuse the existing secure OAuth state mechanism.
+    state_service = MetaStateService()
+
+    state = state_service.create_state(
+        current_user.id
+    )
+
+    service = InstagramAuthService()
+
+    login_url = service.get_login_url(
+        state
+    )
+
+    return {
+        "auth_url": login_url
+    }
+
+
+# ============================================================
+# INSTAGRAM CALLBACK
+# ============================================================
+
+@router.get("/instagram/callback")
+async def instagram_callback(
+    code: str,
+    state: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Instagram OAuth callback.
+
+    Flow:
+        1. Verify OAuth state
+        2. Exchange authorization code
+        3. Exchange for long-lived token
+        4. Fetch Instagram profile
+        5. Save/update Instagram account
+    """
+
+    # --------------------------------------------------------
+    # 1. Verify OAuth state
+    # --------------------------------------------------------
+
+    state_service = MetaStateService()
+
+    try:
+        user_id = state_service.verify_state(
+            state
+        )
+
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired OAuth state",
+        )
+
+    # --------------------------------------------------------
+    # 2. Create Instagram service
+    # --------------------------------------------------------
+
+    service = InstagramAuthService()
+
+    # --------------------------------------------------------
+    # 3. Exchange authorization code
+    # --------------------------------------------------------
+
+    token_data = await service.exchange_code_for_token(
+        code
+    )
+
+    short_lived_token = token_data.get(
+        "access_token"
+    )
+
+    if not short_lived_token:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Instagram access token was not returned"
+            ),
+        )
+
+    # --------------------------------------------------------
+    # 4. Exchange for long-lived token
+    # --------------------------------------------------------
+
+    long_lived_token_data = (
+        await service.exchange_for_long_lived_token(
+            short_lived_token
+        )
+    )
+
+    access_token = long_lived_token_data.get(
+        "access_token"
+    )
+
+    if not access_token:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Long-lived Instagram access token "
+                "was not returned"
+            ),
+        )
+
+    # --------------------------------------------------------
+    # 5. Get Instagram profile
+    # --------------------------------------------------------
+
+    instagram_profile = await service.get_profile(
+        access_token
+    )
+
+    instagram_user_id = (
+        instagram_profile.get("id")
+        or instagram_profile.get("user_id")
+    )
+
+    username = instagram_profile.get(
+        "username"
+    )
+
+    name = instagram_profile.get(
+        "name"
+    )
+
+    if not instagram_user_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Instagram user ID was not returned"
+            ),
+        )
+
+    # --------------------------------------------------------
+    # 6. Find existing Instagram account
+    # --------------------------------------------------------
+
+    instagram_account = (
+        db.query(InstagramAccount)
+        .filter(
+            InstagramAccount.instagram_user_id
+            == instagram_user_id
+        )
+        .first()
+    )
+
+    # --------------------------------------------------------
+    # 7. Update existing account
+    # --------------------------------------------------------
+
+    if instagram_account:
+
+        # Make sure the Instagram account belongs
+        # to the authenticated application user.
+
+        user_connections = (
+            db.query(MetaConnection)
+            .filter(
+                MetaConnection.user_id == user_id
+            )
+            .all()
+        )
+
+        user_connection_ids = {
+            connection.id
+            for connection in user_connections
+        }
+
+        if (
+            instagram_account.meta_connection_id
+            not in user_connection_ids
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Instagram account belongs to "
+                    "another user"
+                ),
+            )
+
+        instagram_account.username = username
+        instagram_account.name = name
+        instagram_account.access_token = access_token
+        instagram_account.is_active = True
+
+    # --------------------------------------------------------
+    # 8. Create new Instagram account
+    # --------------------------------------------------------
+
+    else:
+
+        connection = (
+            db.query(MetaConnection)
+            .filter(
+                MetaConnection.user_id == user_id
+            )
+            .first()
+        )
+
+        if not connection:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Meta connection not found. "
+                    "Connect your Meta account first."
+                ),
+            )
+
+        instagram_account = InstagramAccount(
+            meta_connection_id=connection.id,
+            instagram_user_id=instagram_user_id,
+            username=username,
+            name=name,
+            access_token=access_token,
+            is_active=True,
+        )
+
+        db.add(instagram_account)
+
+    # --------------------------------------------------------
+    # 9. Save database changes
+    # --------------------------------------------------------
+
+    db.commit()
+    db.refresh(instagram_account)
+
+    # --------------------------------------------------------
+    # 10. Never return access token
+    # --------------------------------------------------------
+
+    return {
+        "message": (
+            "Instagram account connected successfully"
+        ),
+        "instagram_user_id": instagram_user_id,
+        "username": username,
+        "name": name,
     }
