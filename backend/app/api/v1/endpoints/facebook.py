@@ -18,7 +18,7 @@ router = APIRouter(
 
 
 # ---------------------------------------------------------
-# Helper
+# HELPER: GET USER PAGE BY PAGE ID
 # ---------------------------------------------------------
 
 def get_user_page(
@@ -26,6 +26,11 @@ def get_user_page(
     current_user,
     db: Session,
 ):
+    """
+    Get an active Facebook Page belonging to the
+    currently authenticated user.
+    """
+
     page = (
         db.query(FacebookPage)
         .join(
@@ -51,6 +56,48 @@ def get_user_page(
 
 
 # ---------------------------------------------------------
+# HELPER: GET USER PAGE THAT OWNS A POST
+# ---------------------------------------------------------
+
+def get_user_page_for_post(
+    post_id: str,
+    current_user,
+    db: Session,
+):
+    """
+    Resolve the Facebook Page that owns a post.
+
+    Facebook Page post IDs normally have this format:
+
+        PAGE_ID_POST_ID
+
+    Example:
+
+        1174699799071336_122101680675437893
+
+    Page ID:
+
+        1174699799071336
+    """
+
+    if "_" not in post_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid Facebook post ID format",
+        )
+
+    page_id = post_id.split("_", 1)[0]
+
+    page = get_user_page(
+        page_id,
+        current_user,
+        db,
+    )
+
+    return page
+
+
+# ---------------------------------------------------------
 # GET PAGE
 # ---------------------------------------------------------
 
@@ -60,7 +107,11 @@ async def get_page(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    page = get_user_page(page_id, current_user, db)
+    page = get_user_page(
+        page_id,
+        current_user,
+        db,
+    )
 
     service = FacebookPageService()
 
@@ -80,7 +131,11 @@ async def get_posts(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    page = get_user_page(page_id, current_user, db)
+    page = get_user_page(
+        page_id,
+        current_user,
+        db,
+    )
 
     service = FacebookPageService()
 
@@ -100,25 +155,18 @@ async def get_comments(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    page = (
-        db.query(FacebookPage)
-        .join(
-            MetaConnection,
-            FacebookPage.meta_connection_id
-            == MetaConnection.id,
-        )
-        .filter(
-            MetaConnection.user_id == current_user.id,
-            FacebookPage.is_active.is_(True),
-        )
-        .first()
-    )
+    """
+    Get comments for a Facebook post.
 
-    if not page:
-        raise HTTPException(
-            status_code=404,
-            detail="Facebook Page not found",
-        )
+    The Page is resolved from the post ID so that the
+    correct Page access token is used.
+    """
+
+    page = get_user_page_for_post(
+        post_id,
+        current_user,
+        db,
+    )
 
     service = FacebookPageService()
 
@@ -174,7 +222,9 @@ async def get_page_insights(
             detail="Facebook Page not found",
         )
 
-    page_access_token = meta_page.get("access_token")
+    page_access_token = meta_page.get(
+        "access_token"
+    )
 
     if not page_access_token:
         raise HTTPException(
@@ -190,7 +240,7 @@ async def get_page_insights(
 
 
 # ---------------------------------------------------------
-# CREATE TEST POST
+# CREATE POST
 # ---------------------------------------------------------
 
 @router.post("/pages/{page_id}/posts")
@@ -200,7 +250,18 @@ async def create_post(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    page = get_user_page(page_id, current_user, db)
+    """
+    Create a Facebook Page post.
+
+    Page ID is explicitly provided in the URL, so the
+    correct Page access token is used.
+    """
+
+    page = get_user_page(
+        page_id,
+        current_user,
+        db,
+    )
 
     service = FacebookPageService()
 
@@ -212,49 +273,8 @@ async def create_post(
 
 
 # ---------------------------------------------------------
-# DELETE TEST POST
+# DELETE POST
 # ---------------------------------------------------------
-async def delete_post(
-    self,
-    post_id: str,
-    page_access_token: str,
-):
-    params = {
-        "access_token": page_access_token,
-    }
-
-    try:
-        async with httpx.AsyncClient(
-            timeout=30.0
-        ) as client:
-
-
-            response = await client.delete(
-                f"{self.GRAPH_URL}/{post_id}",
-                params=params,
-            )
-
-    except httpx.TimeoutException:
-        raise HTTPException(
-            status_code=504,
-            detail="Meta Graph API timed out while deleting the post",
-        )
-
-    if response.status_code != 200:
-        try:
-            error = response.json()
-        except Exception:
-            error = response.text
-
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "Failed to delete Facebook post",
-                "meta_response": error,
-            },
-        )
-
-    return response.json()
 
 @router.delete("/posts/{post_id}")
 async def delete_post(
@@ -262,25 +282,18 @@ async def delete_post(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    page = (
-        db.query(FacebookPage)
-        .join(
-            MetaConnection,
-            FacebookPage.meta_connection_id
-            == MetaConnection.id,
-        )
-        .filter(
-            MetaConnection.user_id == current_user.id,
-            FacebookPage.is_active.is_(True),
-        )
-        .first()
-    )
+    """
+    Delete a Facebook post.
 
-    if not page:
-        raise HTTPException(
-            status_code=404,
-            detail="Facebook Page not found",
-        )
+    The Page is resolved from the post ID so that the
+    correct Page access token is used.
+    """
+
+    page = get_user_page_for_post(
+        post_id,
+        current_user,
+        db,
+    )
 
     service = FacebookPageService()
 

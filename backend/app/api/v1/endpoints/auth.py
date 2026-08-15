@@ -1,7 +1,6 @@
 from app.models.meta_connection import MetaConnection
 from app.models.facebook_page import FacebookPage
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
@@ -130,10 +129,13 @@ def meta_login(
         state
     )
 
-    # Redirect browser to Meta
-    return RedirectResponse(
-        url=login_url
-    )
+    # Return the OAuth URL instead of redirecting.
+    # This makes the endpoint testable from Swagger UI.
+    # Open the returned auth_url in a normal browser tab to continue
+    # the Meta OAuth flow. The existing callback remains unchanged.
+    return {
+        "auth_url": login_url
+    }
 
 
 # ============================================================
