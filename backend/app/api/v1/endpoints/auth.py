@@ -1,6 +1,8 @@
 from app.models.meta_connection import MetaConnection
 from app.models.facebook_page import FacebookPage
 from app.models.instagram_account import InstagramAccount
+from app.services.instagram_service import InstagramService
+from app.schemas.instagram import InstagramPublishRequest
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
@@ -677,4 +679,198 @@ async def instagram_callback(
         "instagram_user_id": instagram_user_id,
         "username": username,
         "name": name,
+    }
+
+# ============================================================
+# GET CONNECTED INSTAGRAM ACCOUNT
+# ============================================================
+
+@router.get("/instagram/account")
+async def get_instagram_account(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get the currently connected Instagram account.
+    """
+
+    instagram_account = (
+        db.query(InstagramAccount)
+        .join(
+            MetaConnection,
+            InstagramAccount.meta_connection_id
+            == MetaConnection.id,
+        )
+        .filter(
+            MetaConnection.user_id == current_user.id,
+            InstagramAccount.is_active.is_(True),
+        )
+        .first()
+    )
+
+    if not instagram_account:
+        raise HTTPException(
+            status_code=404,
+            detail="No Instagram account connected",
+        )
+
+    service = InstagramService()
+
+    profile = await service.get_profile(
+        instagram_user_id=(
+            instagram_account.instagram_user_id
+        ),
+        access_token=(
+            instagram_account.access_token
+        ),
+    )
+
+    return {
+        "id": profile.get("id"),
+        "username": profile.get("username"),
+        "name": profile.get("name"),
+        "profile_picture_url": profile.get(
+            "profile_picture_url"
+        ),
+    }
+
+# ============================================================
+# GET INSTAGRAM MEDIA
+# ============================================================
+
+@router.get("/instagram/media")
+async def get_instagram_media(
+    limit: int = 25,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get media from the connected Instagram account.
+    """
+
+    if limit < 1 or limit > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="limit must be between 1 and 100",
+        )
+
+    instagram_account = (
+        db.query(InstagramAccount)
+        .join(
+            MetaConnection,
+            InstagramAccount.meta_connection_id
+            == MetaConnection.id,
+        )
+        .filter(
+            MetaConnection.user_id == current_user.id,
+            InstagramAccount.is_active.is_(True),
+        )
+        .first()
+    )
+
+    if not instagram_account:
+        raise HTTPException(
+            status_code=404,
+            detail="No Instagram account connected",
+        )
+
+    service = InstagramService()
+
+    media = await service.get_media(
+        instagram_user_id=(
+            instagram_account.instagram_user_id
+        ),
+        access_token=(
+            instagram_account.access_token
+        ),
+        limit=limit,
+    )
+
+    return media
+
+# ============================================================
+# PUBLISH INSTAGRAM IMAGE
+# ============================================================
+
+@router.post("/instagram/publish")
+async def publish_instagram_image(
+    request: InstagramPublishRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Publish an image to the connected Instagram account.
+
+    Flow:
+        1. Find connected Instagram account
+        2. Get server-side access token
+        3. Create Instagram media container
+        4. Publish the container
+        5. Return publishing result
+    """
+
+    # --------------------------------------------------------
+    # 1. Find connected Instagram account
+    # --------------------------------------------------------
+
+    instagram_account = (
+        db.query(InstagramAccount)
+        .join(
+            MetaConnection,
+            InstagramAccount.meta_connection_id
+            == MetaConnection.id,
+        )
+        .filter(
+            MetaConnection.user_id == current_user.id,
+            InstagramAccount.is_active.is_(True),
+        )
+        .first()
+    )
+
+    if not instagram_account:
+        raise HTTPException(
+            status_code=404,
+            detail="No Instagram account connected",
+        )
+
+    # --------------------------------------------------------
+    # 2. Create Instagram service
+    # --------------------------------------------------------
+
+    service = InstagramService()
+
+    # --------------------------------------------------------
+    # 3. Publish image
+    # --------------------------------------------------------
+
+    result = await service.publish_image(
+        instagram_user_id=(
+            instagram_account.instagram_user_id
+        ),
+        access_token=(
+            instagram_account.access_token
+        ),
+        image_url=str(request.image_url),
+        caption=request.caption,
+        alt_text=request.alt_text,
+    )
+
+    # --------------------------------------------------------
+    # 4. Safe response
+    # --------------------------------------------------------
+
+    return {
+        "message": "Instagram post published successfully",
+        "instagram_user_id": (
+            instagram_account.instagram_user_id
+        ),
+        "container_id": result.get(
+            "container_id"
+        ),
+        "media_id": result.get(
+            "media_id"
+        ),
+        "status": result.get(
+            "status"
+        ),
     }

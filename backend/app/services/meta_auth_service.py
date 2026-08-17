@@ -63,21 +63,22 @@ class MetaAuthService:
         params = {
             "client_id": self.app_id,
             "redirect_uri": self.redirect_uri,
-            "scope": (
-                "public_profile,"
-                "pages_show_list,"
-                "pages_read_engagement,"
-                "pages_manage_posts,"
-                "pages_manage_metadata,"
-                "pages_read_user_content,"
+            "scope": ",".join([
+                "public_profile",
+                "pages_show_list",
+                "pages_read_engagement",
+                "pages_manage_posts",
+                "pages_manage_metadata",
+                "pages_read_user_content",
                 "pages_manage_engagement",
-            ),
+            ]),
             "response_type": "code",
             "state": state,
         }
 
         return (
-            f"{self.META_OAUTH_URL}?{urlencode(params)}"
+            f"{self.META_OAUTH_URL}"
+            f"?{urlencode(params)}"
         )
 
     # ============================================================

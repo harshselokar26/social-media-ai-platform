@@ -152,6 +152,47 @@ class FacebookPageService:
         return response.json()
 
     # ---------------------------------------------------------
+    # CREATE IMAGE POST
+    # ---------------------------------------------------------
+
+    async def create_image_post(
+        self,
+        page_id: str,
+        page_access_token: str,
+        image_url: str,
+        message: str | None = None,
+    ):
+        data = {
+            "url": image_url,
+            "access_token": page_access_token,
+        }
+
+        if message:
+            data["caption"] = message
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{self.GRAPH_URL}/{page_id}/photos",
+                data=data,
+            )
+
+        if response.status_code not in (200, 201):
+            try:
+                error = response.json()
+            except Exception:
+                error = response.text
+
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "Failed to create Facebook image post",
+                    "meta_response": error,
+                },
+            )
+
+        return response.json()
+
+    # ---------------------------------------------------------
     # DELETE POST
     # ---------------------------------------------------------
 

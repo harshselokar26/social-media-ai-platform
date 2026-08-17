@@ -271,6 +271,37 @@ async def create_post(
         message,
     )
 
+# ---------------------------------------------------------
+# CREATE IMAGE POST
+# ---------------------------------------------------------
+
+@router.post("/pages/{page_id}/image-posts")
+async def create_image_post(
+    page_id: str,
+    image_url: str,
+    message: str | None = None,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Create an image post on a Facebook Page.
+    """
+
+    page = get_user_page(
+        page_id,
+        current_user,
+        db,
+    )
+
+    service = FacebookPageService()
+
+    return await service.create_image_post(
+        page_id=page.page_id,
+        page_access_token=page.page_access_token,
+        image_url=image_url,
+        message=message,
+    )
+
 
 # ---------------------------------------------------------
 # DELETE POST

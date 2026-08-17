@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     INSTAGRAM_REDIRECT_URI: str = ""
 
     # ============================================================
+    # DEVELOPMENT TEST PUBLISHING
+    # ============================================================
+
+    TEST_PUBLISH_CAPTION: str = (
+        "Unified AI Social Media Platform Test 🚀"
+    )
+
+    TEST_PUBLISH_IMAGE_URL: str = ""
+
+    # ============================================================
     # ENVIRONMENT
     # ============================================================
 
@@ -72,3 +82,13 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# # ============================================================
+# # DEVELOPMENT TEST PUBLISHING
+# # ============================================================
+
+# TEST_PUBLISH_CAPTION: str = (
+#     "Unified AI Social Media Platform Test 🚀"
+# )
+
+# TEST_PUBLISH_IMAGE_URL: str = ""
