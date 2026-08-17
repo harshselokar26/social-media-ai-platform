@@ -16,7 +16,7 @@ router = APIRouter(
 
 
 # ============================================================
-# NORMAL PUBLISH ENDPOINT
+# ORIGINAL UNIFIED PUBLISH ENDPOINT
 # ============================================================
 
 @router.post("/publish")
@@ -25,9 +25,12 @@ async def publish_post(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    Publish a post to the selected connected platforms.
-    """
+    print("========== UNIFIED PUBLISH DEBUG ==========")
+    print("USER ID:", current_user.id)
+    print("CAPTION:", request.caption)
+    print("IMAGE URL:", request.image_url)
+    print("PLATFORMS:", request.platforms)
+    print("===========================================")
 
     publisher = PublisherService(db)
 
@@ -40,7 +43,7 @@ async def publish_post(
 
 
 # ============================================================
-# FIXED DEVELOPMENT TEST ENDPOINT
+# FIXED DEVELOPMENT TEST
 # ============================================================
 
 @router.post("/test-publish")
@@ -48,15 +51,6 @@ async def test_publish(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    Fixed development test endpoint.
-
-    Publishes the same test image and caption
-    to Facebook and Instagram.
-
-    No request body is required.
-    """
-
     publisher = PublisherService(db)
 
     return await publisher.publish(
@@ -67,4 +61,5 @@ async def test_publish(
             "facebook",
             "instagram",
         ],
+        facebook_page_id=settings.FACEBOOK_TEST_PAGE_ID,
     )
