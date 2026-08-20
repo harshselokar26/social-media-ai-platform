@@ -1,14 +1,21 @@
-from fastapi import APIRouter, Depends
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_current_user
 from app.core.config import settings
 from app.db.session import get_db
 
+from app.models.organization_member import OrganizationMember
+
 from app.schemas.publish import PublishPostRequest
+from app.schemas.post import PostResponse, PostListResponse
+from app.schemas.schedule import SchedulePostRequest
+
 from app.services.publisher_service import PublisherService
-
-
+from app.services.post_service import PostService
+from app.services.scheduler_service import SchedulerService
 router = APIRouter(
     prefix="/posts",
     tags=["Posts"],
@@ -40,6 +47,43 @@ async def publish_post(
         image_url=str(request.image_url),
         platforms=request.platforms,
     )
+# ============================================================
+# SCHEDULE POST
+# ============================================================
+
+@router.post(
+    "/schedule",
+    response_model=PostResponse,
+)
+async def schedule_post(
+    request: SchedulePostRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    scheduler = SchedulerService(db)
+
+    membership = (
+        db.query(OrganizationMember)
+        .filter(
+            OrganizationMember.user_id == current_user.id
+        )
+        .first()
+    )
+
+    if not membership:
+        raise HTTPException(
+            status_code=400,
+            detail="User is not a member of any organization.",
+        )
+
+    return scheduler.schedule_post(
+        user_id=current_user.id,
+        organization_id=membership.organization_id,
+        caption=request.caption,
+        image_url=str(request.image_url),
+        platforms=request.platforms,
+        scheduled_at=request.scheduled_at,
+    )
 
 
 # ============================================================
@@ -62,4 +106,71 @@ async def test_publish(
             "instagram",
         ],
         facebook_page_id=settings.FACEBOOK_TEST_PAGE_ID,
+    )
+
+# ============================================================
+# GET USER POSTS
+# ============================================================
+
+@router.get(
+    "",
+    response_model=PostListResponse,
+)
+async def get_posts(
+    limit: int = Query(
+        default=50,
+        ge=1,
+        le=100,
+    ),
+    offset: int = Query(
+        default=0,
+        ge=0,
+    ),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    service = PostService(db)
+
+    return service.get_user_posts(
+        user_id=current_user.id,
+        limit=limit,
+        offset=offset,
+    )
+
+
+# ============================================================
+# GET SINGLE POST
+# ============================================================
+
+@router.get(
+    "/{post_id}",
+    response_model=PostResponse,
+)
+async def get_post(
+    post_id: UUID,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    service = PostService(db)
+
+    return service.get_user_post(
+        user_id=current_user.id,
+        post_id=post_id,
+    )
+
+# ============================================================
+# DELETE POST
+# ============================================================
+
+@router.delete("/{post_id}")
+async def delete_post(
+    post_id: UUID,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    service = PostService(db)
+
+    return service.delete_user_post(
+        user_id=current_user.id,
+        post_id=post_id,
     )

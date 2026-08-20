@@ -2,7 +2,10 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from datetime import datetime, timezone
 
+from app.models.post import Post
+from app.models.organization_member import OrganizationMember
 from app.models.meta_connection import MetaConnection
 from app.models.facebook_page import FacebookPage
 from app.models.instagram_account import InstagramAccount
@@ -10,6 +13,9 @@ from app.models.instagram_account import InstagramAccount
 from app.services.facebook_page_service import FacebookPageService
 from app.services.instagram_service import InstagramService
 
+from app.services.image_validation_service import (
+    ImageValidationService,
+)
 
 class PublisherService:
 
@@ -18,6 +24,7 @@ class PublisherService:
 
         self.facebook_service = FacebookPageService()
         self.instagram_service = InstagramService()
+        self.image_validator = ImageValidationService()
 
     async def publish(
         self,
@@ -29,6 +36,71 @@ class PublisherService:
     ):
 
         results = {}
+
+        # ========================================================
+        # INSTAGRAM IMAGE VALIDATION
+        # ========================================================
+
+        if "instagram" in platforms:
+
+            try:
+
+                image_info = (
+                    await self.image_validator
+                    .validate_instagram_image(
+                        image_url
+                    )
+                )
+
+                print(
+                    "========== INSTAGRAM IMAGE VALIDATION =========="
+                )
+                print(
+                    "WIDTH:",
+                    image_info["width"],
+                )
+                print(
+                    "HEIGHT:",
+                    image_info["height"],
+                )
+                print(
+                    "ASPECT RATIO:",
+                    image_info["aspect_ratio"],
+                )
+                print(
+                    "FORMAT:",
+                    image_info["format"],
+                )
+                print(
+                    "================================================="
+                )
+
+            except ValueError as exc:
+
+                raise HTTPException(
+                    status_code=422,
+                    detail=str(exc),
+                )
+
+        # ========================================================
+        # ORGANIZATION MEMBERSHIP CHECK
+        # ========================================================
+
+        membership = (
+            self.db.query(OrganizationMember)
+            .filter(
+                OrganizationMember.user_id == user_id
+            )
+            .first()
+        )
+
+        if not membership:
+            raise HTTPException(
+                status_code=403,
+                detail="User is not a member of an organization",
+            )
+
+        organization_id = membership.organization_id
 
         # ========================================================
         # FACEBOOK
@@ -237,7 +309,49 @@ class PublisherService:
         else:
             overall_status = "failed"
 
+        facebook_post_id = None
+        instagram_media_id = None
+        error_messages = []
+
+        if results.get("facebook"):
+            facebook_post_id = results["facebook"].get("post_id")
+
+            if results["facebook"]["status"] == "failed":
+                error_messages.append(
+                    str(results["facebook"].get("message", "Facebook publishing failed"))
+                )
+
+        if results.get("instagram"):
+            instagram_media_id = results["instagram"].get("media_id")
+
+            if results["instagram"]["status"] == "failed":
+                error_messages.append(
+                    str(results["instagram"].get("message", "Instagram publishing failed"))
+                )
+
+        post = Post(
+            user_id=user_id,
+            organization_id=organization_id,
+            caption=caption,
+            image_url=image_url,
+            status=overall_status,
+            platforms=platforms,
+            facebook_post_id=facebook_post_id,
+            instagram_media_id=instagram_media_id,
+            error_message="; ".join(error_messages) if error_messages else None,
+            published_at=(
+                datetime.now(timezone.utc)
+                if overall_status in ("published", "partial")
+                else None
+            ),
+        )
+
+        self.db.add(post)
+        self.db.commit()
+        self.db.refresh(post)
+
         return {
             "status": overall_status,
+            "post_id": str(post.id),
             "results": results,
         }
