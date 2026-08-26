@@ -112,7 +112,7 @@ Publishing information
 
 The developer must have:
 
-- [ ] OpenAI account/project access
+- [ ] OpenAI account/project accesss
 - [ ] Permission to create or use an API key
 - [ ] API key available for backend configuration
 

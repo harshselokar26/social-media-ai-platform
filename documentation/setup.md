@@ -16,7 +16,7 @@ The AI Social Media Automation Platform is a full-stack application that allows 
 - Upload media.
 - Connect Facebook Pages.
 - Connect Instagram accounts.
-- Publish content to connected platforms.
+- Publish content to connected platformss.
 - Schedule posts.
 - View scheduled, published, and failed posts.
 - Delete posts.
