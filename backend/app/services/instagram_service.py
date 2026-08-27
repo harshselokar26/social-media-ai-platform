@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 from fastapi import HTTPException
 
@@ -251,7 +252,62 @@ class InstagramService:
             )
 
         # --------------------------------------------------------
-        # 2. Publish container
+        # 2. Wait for Instagram to finish processing
+        # --------------------------------------------------------
+
+        max_attempts = 30
+        wait_seconds = 2
+
+        for attempt in range(max_attempts):
+
+            status_response = await self.get_container_status(
+                container_id=container_id,
+                access_token=access_token,
+            )
+
+            status_code = status_response.get("status_code")
+            status = status_response.get("status")
+
+            print(
+                f"Instagram container {container_id} "
+                f"status: {status_code or status}"
+            )
+
+            # Media is ready
+            if status_code == "FINISHED":
+                break
+
+            # Media failed or expired
+            if status_code in {"ERROR", "EXPIRED"}:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "message": "Instagram media container failed",
+                        "container_id": container_id,
+                        "status_code": status_code,
+                        "status": status,
+                    },
+                )
+
+            # Still processing
+            if status_code == "IN_PROGRESS":
+                if attempt == max_attempts - 1:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "message": (
+                                "Instagram media container "
+                                "did not finish processing in time"
+                            ),
+                            "container_id": container_id,
+                            "status_code": status_code,
+                        },
+                    )
+
+                await asyncio.sleep(wait_seconds)
+
+        # --------------------------------------------------------
+        # 3. Publish finished container
         # --------------------------------------------------------
 
         published = await self.publish_container(
@@ -261,6 +317,23 @@ class InstagramService:
         )
 
         media_id = published.get("id")
+
+        if not media_id:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": (
+                        "Instagram publish succeeded but "
+                        "no media ID was returned"
+                    ),
+                    "container_id": container_id,
+                    "response": published,
+                },
+            )
+
+        # --------------------------------------------------------
+        # 4. Return result
+        # --------------------------------------------------------
 
         return {
             "container_id": container_id,
