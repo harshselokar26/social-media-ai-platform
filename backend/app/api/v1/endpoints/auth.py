@@ -1,3 +1,4 @@
+from fastapi.responses import RedirectResponse
 from app.models.meta_connection import MetaConnection
 from app.models.facebook_page import FacebookPage
 from app.models.instagram_account import InstagramAccount
@@ -672,14 +673,10 @@ async def instagram_callback(
     # 10. Never return access token
     # --------------------------------------------------------
 
-    return {
-        "message": (
-            "Instagram account connected successfully"
-        ),
-        "instagram_user_id": instagram_user_id,
-        "username": username,
-        "name": name,
-    }
+    return RedirectResponse(
+    url="https://social-media-ai-frotend.onrender.com/accounts",
+    status_code=302,
+)
 
 # ============================================================
 # GET CONNECTED INSTAGRAM ACCOUNT
