@@ -1,4 +1,5 @@
 from fastapi.responses import RedirectResponse
+from urllib.parse import urlencode
 from app.models.meta_connection import MetaConnection
 from app.models.facebook_page import FacebookPage
 from app.models.instagram_account import InstagramAccount
@@ -30,7 +31,28 @@ router = APIRouter(
     tags=["Authentication"],
 )
 
+FRONTEND_ACCOUNTS_URL = (
+    "https://social-media-ai-frotend.onrender.com/accounts"
+)
 
+
+def oauth_redirect(
+    platform: str,
+    status: str,
+    message: str,
+):
+    query = urlencode(
+        {
+            "oauth": platform,
+            "status": status,
+            "message": message,
+        }
+    )
+
+    return RedirectResponse(
+        url=f"{FRONTEND_ACCOUNTS_URL}?{query}",
+        status_code=303,
+    )
 
 
 
@@ -149,8 +171,10 @@ def meta_login(
 
 @router.get("/meta/callback")
 async def meta_callback(
-    code: str,
-    state: str,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
     db: Session = Depends(get_db),
 ):
     """
@@ -163,127 +187,88 @@ async def meta_callback(
         4. Save/update Meta connection
     """
 
-    # --------------------------------------------------------
-    # 1. Verify OAuth state
-    # --------------------------------------------------------
-
-    state_service = MetaStateService()
+    if error:
+        return oauth_redirect(
+            platform="facebook",
+            status="error",
+            message=error_description or error,
+        )
 
     try:
-        user_id = state_service.verify_state(
-            state
+        if not code or not state:
+            raise HTTPException(
+                status_code=400,
+                detail="Meta authorization was incomplete",
+            )
+
+        user_id = MetaStateService().verify_state(state)
+        service = MetaAuthService()
+        token_data = await service.exchange_code_for_token(code)
+        access_token = token_data.get("access_token")
+
+        if not access_token:
+            raise HTTPException(
+                status_code=400,
+                detail="Meta access token was not returned",
+            )
+
+        meta_user = await service.get_meta_user(access_token)
+        meta_user_id = meta_user.get("id")
+        meta_name = meta_user.get("name")
+
+        if not meta_user_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Meta user ID was not returned",
+            )
+
+        connection = (
+            db.query(MetaConnection)
+            .filter(MetaConnection.user_id == user_id)
+            .first()
         )
 
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid or expired OAuth state",
+        if connection:
+            connection.meta_user_id = meta_user_id
+            connection.meta_name = meta_name
+            connection.access_token = access_token
+            connection.token_type = token_data.get("token_type")
+            connection.expires_in = token_data.get("expires_in")
+        else:
+            connection = MetaConnection(
+                user_id=user_id,
+                meta_user_id=meta_user_id,
+                meta_name=meta_name,
+                access_token=access_token,
+                token_type=token_data.get("token_type"),
+                expires_in=token_data.get("expires_in"),
+            )
+            db.add(connection)
+
+        db.commit()
+
+        return oauth_redirect(
+            platform="facebook",
+            status="success",
+            message="Facebook connected successfully",
         )
 
-    # --------------------------------------------------------
-    # 2. Create Meta service
-    # --------------------------------------------------------
-
-    service = MetaAuthService()
-
-    # --------------------------------------------------------
-    # 3. Exchange authorization code for access token
-    # --------------------------------------------------------
-
-    token_data = await service.exchange_code_for_token(
-        code
-    )
-
-    access_token = token_data.get(
-        "access_token"
-    )
-
-    if not access_token:
-        raise HTTPException(
-            status_code=400,
-            detail="Meta access token was not returned",
+    except HTTPException as exc:
+        db.rollback()
+        detail = exc.detail
+        message = detail.get("message", "Meta connection failed") if isinstance(detail, dict) else str(detail)
+        return oauth_redirect(
+            platform="facebook",
+            status="error",
+            message=message,
         )
-
-    # --------------------------------------------------------
-    # 4. Get Meta user
-    # --------------------------------------------------------
-
-    meta_user = await service.get_meta_user(
-        access_token
-    )
-
-    meta_user_id = meta_user.get("id")
-    meta_name = meta_user.get("name")
-
-    if not meta_user_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Meta user ID was not returned",
+    except Exception:
+        db.rollback()
+        return oauth_redirect(
+            platform="facebook",
+            status="error",
+            message="Facebook connection failed",
         )
-
-    # --------------------------------------------------------
-    # 5. Find existing Meta connection
-    # --------------------------------------------------------
-
-    connection = (
-        db.query(MetaConnection)
-        .filter(
-            MetaConnection.user_id == user_id
-        )
-        .first()
-    )
-
-    # --------------------------------------------------------
-    # 6. Update existing connection
-    # --------------------------------------------------------
-
-    if connection:
-
-        connection.meta_user_id = meta_user_id
-        connection.meta_name = meta_name
-        connection.access_token = access_token
-        connection.token_type = token_data.get(
-            "token_type"
-        )
-        connection.expires_in = token_data.get(
-            "expires_in"
-        )
-
-    # --------------------------------------------------------
-    # 7. Create new connection
-    # --------------------------------------------------------
-
-    else:
-
-        connection = MetaConnection(
-            user_id=user_id,
-            meta_user_id=meta_user_id,
-            meta_name=meta_name,
-            access_token=access_token,
-            token_type=token_data.get(
-                "token_type"
-            ),
-            expires_in=token_data.get(
-                "expires_in"
-            ),
-        )
-
-        db.add(connection)
-
-    # --------------------------------------------------------
-    # 8. Save database changes
-    # --------------------------------------------------------
-
-    db.commit()
-    db.refresh(connection)
-
-    # Never return the access token to the browser
-
-    return {
-        "message": "Meta account connected successfully",
-        "meta_user_id": meta_user_id,
-        "meta_name": meta_name,
-    }
 
 
 # ============================================================
@@ -426,10 +411,9 @@ async def meta_pages(
     # 6. Return ONLY safe Page information
     # --------------------------------------------------------
 
-    return RedirectResponse(
-    url="https://social-media-ai-frotend.onrender.com/accounts",
-    status_code=302,
-)
+    return {
+        "data": response_pages
+    }
 
 # ============================================================
 # INSTAGRAM LOGIN
@@ -467,8 +451,10 @@ def instagram_login(
 
 @router.get("/instagram/callback")
 async def instagram_callback(
-    code: str,
-    state: str,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
     db: Session = Depends(get_db),
 ):
     """
@@ -482,202 +468,140 @@ async def instagram_callback(
         5. Save/update Instagram account
     """
 
-    # --------------------------------------------------------
-    # 1. Verify OAuth state
-    # --------------------------------------------------------
-
-    state_service = MetaStateService()
+    if error:
+        return oauth_redirect(
+            platform="instagram",
+            status="error",
+            message=error_description or error,
+        )
 
     try:
-        user_id = state_service.verify_state(
-            state
-        )
+        if not code or not state:
+            raise HTTPException(
+                status_code=400,
+                detail="Instagram authorization was incomplete",
+            )
 
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid or expired OAuth state",
-        )
+        user_id = MetaStateService().verify_state(state)
 
-    # --------------------------------------------------------
-    # 2. Create Instagram service
-    # --------------------------------------------------------
+        service = InstagramAuthService()
 
-    service = InstagramAuthService()
+        token_data = await service.exchange_code_for_token(code)
 
-    # --------------------------------------------------------
-    # 3. Exchange authorization code
-    # --------------------------------------------------------
+        short_lived_token = token_data.get("access_token")
 
-    token_data = await service.exchange_code_for_token(
-        code
-    )
+        if not short_lived_token:
+            raise HTTPException(
+                status_code=400,
+                detail="Instagram access token was not returned",
+            )
 
-    short_lived_token = token_data.get(
-        "access_token"
-    )
-
-    if not short_lived_token:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Instagram access token was not returned"
-            ),
-        )
-
-    # --------------------------------------------------------
-    # 4. Exchange for long-lived token
-    # --------------------------------------------------------
-
-    long_lived_token_data = (
-        await service.exchange_for_long_lived_token(
+        long_lived_token_data = await service.exchange_for_long_lived_token(
             short_lived_token
         )
-    )
 
-    access_token = long_lived_token_data.get(
-        "access_token"
-    )
+        access_token = long_lived_token_data.get("access_token")
 
-    if not access_token:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Long-lived Instagram access token "
-                "was not returned"
-            ),
+        if not access_token:
+            raise HTTPException(
+                status_code=400,
+                detail="Long-lived Instagram access token was not returned",
+            )
+
+        instagram_profile = await service.get_profile(access_token)
+
+        instagram_user_id = (
+            instagram_profile.get("id")
+            or instagram_profile.get("user_id")
+        )
+        username = instagram_profile.get("username")
+        name = instagram_profile.get("name")
+
+        if not instagram_user_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Instagram user ID was not returned",
+            )
+
+        instagram_account = (
+            db.query(InstagramAccount)
+            .filter(InstagramAccount.instagram_user_id == instagram_user_id)
+            .first()
         )
 
-    # --------------------------------------------------------
-    # 5. Get Instagram profile
-    # --------------------------------------------------------
-
-    instagram_profile = await service.get_profile(
-        access_token
-    )
-
-    instagram_user_id = (
-        instagram_profile.get("id")
-        or instagram_profile.get("user_id")
-    )
-
-    username = instagram_profile.get(
-        "username"
-    )
-
-    name = instagram_profile.get(
-        "name"
-    )
-
-    if not instagram_user_id:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Instagram user ID was not returned"
-            ),
-        )
-
-    # --------------------------------------------------------
-    # 6. Find existing Instagram account
-    # --------------------------------------------------------
-
-    instagram_account = (
-        db.query(InstagramAccount)
-        .filter(
-            InstagramAccount.instagram_user_id
-            == instagram_user_id
-        )
-        .first()
-    )
-
-    # --------------------------------------------------------
-    # 7. Update existing account
-    # --------------------------------------------------------
-
-    if instagram_account:
+        if instagram_account:
 
         # Make sure the Instagram account belongs
         # to the authenticated application user.
 
-        user_connections = (
-            db.query(MetaConnection)
-            .filter(
-                MetaConnection.user_id == user_id
+            user_connections = (
+                db.query(MetaConnection)
+                .filter(MetaConnection.user_id == user_id)
+                .all()
             )
-            .all()
+
+            user_connection_ids = {connection.id for connection in user_connections}
+
+            if instagram_account.meta_connection_id not in user_connection_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Instagram account belongs to another user",
+                )
+
+            instagram_account.username = username
+            instagram_account.name = name
+            instagram_account.access_token = access_token
+            instagram_account.is_active = True
+
+        else:
+
+            connection = (
+                db.query(MetaConnection)
+                .filter(MetaConnection.user_id == user_id)
+                .first()
+            )
+
+            if not connection:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Meta connection not found. Connect your Meta account first.",
+                )
+
+            instagram_account = InstagramAccount(
+                meta_connection_id=connection.id,
+                instagram_user_id=instagram_user_id,
+                username=username,
+                name=name,
+                access_token=access_token,
+                is_active=True,
+            )
+
+            db.add(instagram_account)
+
+        db.commit()
+
+        return oauth_redirect(
+            platform="instagram",
+            status="success",
+            message="Instagram connected successfully",
         )
 
-        user_connection_ids = {
-            connection.id
-            for connection in user_connections
-        }
-
-        if (
-            instagram_account.meta_connection_id
-            not in user_connection_ids
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "Instagram account belongs to "
-                    "another user"
-                ),
-            )
-
-        instagram_account.username = username
-        instagram_account.name = name
-        instagram_account.access_token = access_token
-        instagram_account.is_active = True
-
-    # --------------------------------------------------------
-    # 8. Create new Instagram account
-    # --------------------------------------------------------
-
-    else:
-
-        connection = (
-            db.query(MetaConnection)
-            .filter(
-                MetaConnection.user_id == user_id
-            )
-            .first()
+    except HTTPException as exc:
+        db.rollback()
+        detail = exc.detail
+        message = detail.get("message", "Instagram connection failed") if isinstance(detail, dict) else str(detail)
+        return oauth_redirect(
+            platform="instagram",
+            status="error",
+            message=message,
         )
-
-        if not connection:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Meta connection not found. "
-                    "Connect your Meta account first."
-                ),
-            )
-
-        instagram_account = InstagramAccount(
-            meta_connection_id=connection.id,
-            instagram_user_id=instagram_user_id,
-            username=username,
-            name=name,
-            access_token=access_token,
-            is_active=True,
+    except Exception:
+        db.rollback()
+        return oauth_redirect(
+            platform="instagram",
+            status="error",
+            message="Instagram connection failed",
         )
-
-        db.add(instagram_account)
-
-    # --------------------------------------------------------
-    # 9. Save database changes
-    # --------------------------------------------------------
-
-    db.commit()
-    db.refresh(instagram_account)
-
-    # --------------------------------------------------------
-    # 10. Never return access token
-    # --------------------------------------------------------
-
-    return RedirectResponse(
-    url="https://social-media-ai-frotend.onrender.com/accounts",
-    status_code=302,
-)
 
 # ============================================================
 # GET CONNECTED INSTAGRAM ACCOUNT
