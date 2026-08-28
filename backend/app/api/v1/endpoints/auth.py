@@ -426,9 +426,10 @@ async def meta_pages(
     # 6. Return ONLY safe Page information
     # --------------------------------------------------------
 
-    return {
-        "data": response_pages
-    }
+    return RedirectResponse(
+    url="https://social-media-ai-frotend.onrender.com/accounts",
+    status_code=302,
+)
 
 # ============================================================
 # INSTAGRAM LOGIN
