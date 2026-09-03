@@ -1,7 +1,6 @@
-from fastapi import FastAPI
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 import asyncio
-from app.api.v1.api import api_router
+
 from app.core.config import settings
 from app.core.logging import configure_logging
 from fastapi.exceptions import RequestValidationError
@@ -11,19 +10,28 @@ from app.core.middleware import register_request_logging
 from app.tasks.scheduler import scheduler_loop
 from fastapi.middleware.cors import CORSMiddleware
 
-configure_logging()
+from app.api.v1.endpoints.auth import router as auth_router
+from app.api.v1.endpoints.health import router as health_router
+from app.api.v1.endpoints.facebook import router as facebook_router
+from app.api.v1.endpoints.media import router as media_router
+from app.api.v1.endpoints.posts import router as posts_router
+from app.api.v1.endpoints.ai import router as ai_router
 
+
+configure_logging()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
 )
+
 scheduler_task = None
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-	"https://social-media-ai-frotend.onrender.com",
+        "https://social-media-ai-frotend.onrender.com",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -36,10 +44,13 @@ app.add_exception_handler(Exception, generic_exception_handler)
 
 register_request_logging(app)
 
-app.include_router(
-    api_router,
-    prefix=settings.API_V1_STR,
-)
+# Register API endpoint routers directly
+app.include_router(health_router, prefix=settings.API_V1_STR)
+app.include_router(auth_router, prefix=settings.API_V1_STR)
+app.include_router(facebook_router, prefix=settings.API_V1_STR)
+app.include_router(media_router, prefix=settings.API_V1_STR)
+app.include_router(posts_router, prefix=settings.API_V1_STR)
+app.include_router(ai_router, prefix=settings.API_V1_STR)
 
 
 @app.get("/")
@@ -47,6 +58,7 @@ def root():
     return {
         "message": "AI Social Media Platform"
     }
+
 
 @app.on_event("startup")
 async def start_scheduler():
